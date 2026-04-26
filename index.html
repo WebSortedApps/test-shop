@@ -125,7 +125,7 @@ Distinction</h1><p class="subheading">Curated collection of luxury and independe
                 
                 
                 <div style="margin:0 0 1.25rem;font-size:1.75rem;font-weight:700;color:#A8A29E;">£149.99</div>
-                <a href="#" onclick="event.preventDefault();return false;" class="btn btn-primary" data-spotlight-product="be931ea6-94a1-4f95-97ad-b920fed1144e" style="display:inline-block;padding:12px 24px;background:#A8A29E;color:#050505;border-radius:0px;font-weight:600;text-decoration:none;cursor:pointer;">Buy £149.99</a>
+                <a href="#" onclick="event.preventDefault();" class="btn btn-primary" data-spotlight-product="be931ea6-94a1-4f95-97ad-b920fed1144e" style="display:inline-block;padding:12px 24px;background:#A8A29E;color:#050505;border-radius:0px;font-weight:600;text-decoration:none;cursor:pointer;">Buy £149.99</a>
             </div>
         </div>
     </section>
@@ -200,6 +200,423 @@ Distinction</h1><p class="subheading">Curated collection of luxury and independe
     
     
     
+    <script>
+    /* WebSorted Shop Embed v2 */
+    (function() {
+      let WS_API = "https://websorted.uk/api";
+      const SITE_ID = "42b75ab7-c51f-440d-9d70-7f9ec21c6a3b";
+      const PRIMARY = "#A8A29E";
+      const THEME = "dark";
+      const BTN_RADIUS = "0px";
+      const CARD_BG = "#111";
+      const CARD_BORDER = "rgba(255,255,255,0.08)";
+      const TEXT = "#FAFAFA";
+      const BG = "#050505";
+      const ORIGIN = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '');
+      const PROD_API = "https://websorted.uk/api"; // hardcoded final fallback
+
+      function _wsFetch(url, opts) {
+        const ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+        const timer = setTimeout(function() { if (ctrl) ctrl.abort(); }, 15000);
+        return fetch(url, Object.assign({ credentials: "omit" }, opts || {}, ctrl ? { signal: ctrl.signal } : {}))
+          .finally(function() { clearTimeout(timer); });
+      }
+
+      // Same-origin probe: if the site is hosted on a custom domain that proxies /api/* to the WebSorted backend,
+      // prefer that route. Falls back to the baked-in WS_API, then to PROD_API as last resort.
+      async function _wsResolveApi() {
+        const probe = "/shop/" + SITE_ID + "/products/public";
+        // 1. Try same-origin
+        try {
+          const sameOrigin = window.location.origin + "/api";
+          if (sameOrigin !== WS_API) {
+            const r = await _wsFetch(sameOrigin + probe);
+            if (r.ok) { WS_API = sameOrigin; return; }
+          }
+        } catch (_) { /* fall through */ }
+        // 2. Try baked WS_API
+        try {
+          const r = await _wsFetch(WS_API + probe);
+          if (r.ok) return;
+        } catch (_) { /* fall through */ }
+        // 3. Final fallback: production API
+        if (WS_API !== PROD_API) {
+          try {
+            const r = await _wsFetch(PROD_API + probe);
+            if (r.ok) { WS_API = PROD_API; return; }
+          } catch (_) { /* keep baked */ }
+        }
+      }
+      
+      let cart = [];
+      let allProducts = [];
+      
+      window.wsShop = {
+        toggleCart: function() {
+          const d = document.getElementById("ws-shop-cart-drawer");
+          d.style.display = d.style.display === "none" ? "block" : "none";
+          renderCart();
+        },
+        addToCart: function(product) {
+          const existing = cart.find(i => i.id === product.id);
+          if (existing) { existing.qty += 1; }
+          else { cart.push({ ...product, qty: 1 }); }
+          updateCartBadge();
+          renderCart();
+        },
+        updateQty: function(productId, delta) {
+          const item = cart.find(i => i.id === productId);
+          if (!item) return;
+          item.qty += delta;
+          if (item.qty <= 0) { cart = cart.filter(i => i.id !== productId); }
+          updateCartBadge();
+          renderCart();
+        },
+        viewProduct: function(productId) {
+          const p = allProducts.find(i => i.id === productId);
+          if (!p) return;
+          showProductDetail(p);
+        },
+        closeDetail: function() {
+          const modal = document.getElementById("ws-product-modal");
+          if (modal) modal.remove();
+        },
+        checkout: async function() {
+          if (cart.length === 0) return;
+          const emailInput = document.getElementById("ws-checkout-email");
+          const email = emailInput ? emailInput.value.trim() : "";
+          if (!email || !email.includes("@")) {
+            if (emailInput) { emailInput.style.border = "2px solid #EF4444"; emailInput.focus(); }
+            return;
+          }
+          const checkoutBtn = document.getElementById("ws-checkout-btn");
+          if (checkoutBtn) { checkoutBtn.textContent = "Processing..."; checkoutBtn.disabled = true; }
+          try {
+            const res = await fetch(WS_API + "/shop/" + SITE_ID + "/checkout", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                items: cart.map(i => ({ product_id: i.id, quantity: i.qty })),
+                customer_email: email,
+                origin_url: ORIGIN
+              })
+            });
+            const data = await res.json();
+            if (data.checkout_url) {
+              localStorage.setItem("ws_order_id", data.order_id || "");
+              localStorage.setItem("ws_order_email", email);
+              window.location.href = data.checkout_url;
+            }
+            else if (data.detail) { alert(data.detail); }
+            else {
+              cart = []; updateCartBadge(); renderCart();
+              showOrderSuccess(data.order_id, email);
+            }
+          } catch(e) {
+            alert("Checkout failed. Please try again.");
+          } finally {
+            if (checkoutBtn) { checkoutBtn.textContent = "Checkout"; checkoutBtn.disabled = false; }
+          }
+        }
+      };
+      
+      function updateCartBadge() {
+        const total = cart.reduce((s, i) => s + i.qty, 0);
+        const badge = document.getElementById("ws-cart-count");
+        const floatBtn = document.getElementById("ws-shop-cart-float");
+        if (badge) badge.textContent = total;
+        if (floatBtn) floatBtn.style.display = total > 0 ? "flex" : "none";
+      }
+      
+      function getSym() {
+        const c = (cart[0]?.currency || allProducts[0]?.currency || "GBP");
+        return c === "GBP" ? "\u00a3" : c === "USD" ? "$" : c === "EUR" ? "\u20ac" : c + " ";
+      }
+      
+      function renderCart() {
+        const drawer = document.getElementById("ws-shop-cart-drawer");
+        if (!drawer) return;
+        if (cart.length === 0) {
+          drawer.innerHTML = '<p style="text-align:center;padding:24px;opacity:0.5;">Cart is empty</p>';
+          return;
+        }
+        const total = cart.reduce((s, i) => s + (i.price * i.qty), 0);
+        const sym = getSym();
+        drawer.innerHTML = '<div style="padding:16px;">' +
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h3 style="margin:0;font-size:16px;">Cart</h3><button onclick="wsShop.toggleCart()" style="background:none;border:none;color:' + TEXT + ';cursor:pointer;font-size:18px;opacity:0.5;">&times;</button></div>' +
+          cart.map(i => '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid ' + CARD_BORDER + ';">' +
+            '<div style="flex:1;"><p style="margin:0;font-size:13px;font-weight:600;">' + i.name + '</p>' +
+            '<p style="margin:2px 0 0;font-size:11px;opacity:0.6;">' + sym + i.price.toFixed(2) + '</p></div>' +
+            '<div style="display:flex;align-items:center;gap:6px;">' +
+            '<button onclick="wsShop.updateQty(\''+i.id+'\', -1)" style="width:24px;height:24px;border:1px solid ' + CARD_BORDER + ';background:transparent;color:' + TEXT + ';border-radius:4px;cursor:pointer;">-</button>' +
+            '<span style="font-size:12px;min-width:16px;text-align:center;">' + i.qty + '</span>' +
+            '<button onclick="wsShop.updateQty(\''+i.id+'\', 1)" style="width:24px;height:24px;border:1px solid ' + CARD_BORDER + ';background:transparent;color:' + TEXT + ';border-radius:4px;cursor:pointer;">+</button>' +
+            '</div></div>'
+          ).join('') +
+          '<div style="margin-top:12px;padding-top:12px;border-top:2px solid ' + PRIMARY + ';">' +
+          '<div style="display:flex;justify-content:space-between;margin-bottom:12px;"><strong>Total</strong><strong>' + sym + total.toFixed(2) + '</strong></div>' +
+          '<input id="ws-checkout-email" type="email" placeholder="Your email for order updates" style="width:100%;padding:8px 12px;margin-bottom:8px;border:1px solid ' + CARD_BORDER + ';border-radius:6px;background:transparent;color:' + TEXT + ';font-size:13px;box-sizing:border-box;outline:none;" onfocus="this.style.border=\'1px solid ' + PRIMARY + '\'"/>' +
+          '<button id="ws-checkout-btn" onclick="wsShop.checkout()" style="width:100%;padding:10px;background:' + PRIMARY + ';color:#050505;border:none;border-radius:' + BTN_RADIUS + ';font-weight:600;cursor:pointer;font-size:14px;">Checkout</button>' +
+          '<a href="https://websorted.uk" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px;font-size:10px;opacity:0.4;text-decoration:none;color:' + TEXT + ';">Shop powered by <strong style="color:' + PRIMARY + ';">WebSorted</strong></a>' +
+          '</div></div>';
+      }
+      
+      function showProductDetail(p) {
+        const sym = getSym();
+        const existing = document.getElementById("ws-product-modal");
+        if (existing) existing.remove();
+        
+        const imgsHtml = (p.images && p.images.length > 0)
+          ? '<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;">' +
+            p.images.map((img, i) => '<img src="' + img + '" alt="" style="width:' + (p.images.length > 1 ? '280px' : '100%') + ';height:280px;object-fit:cover;border-radius:8px;flex-shrink:0;cursor:pointer;" onclick="document.getElementById(\'ws-detail-main-img\').src=this.src"/>').join('') + '</div>'
+          : '';
+        
+        const mainImg = (p.images && p.images.length > 0)
+          ? '<img id="ws-detail-main-img" src="' + p.images[0] + '" alt="' + p.name + '" style="width:100%;max-height:400px;object-fit:cover;border-radius:8px;margin-bottom:12px;">'
+          : '';
+        
+        const variantsHtml = (p.variants && p.variants.length > 0)
+          ? '<div style="margin:12px 0;"><p style="font-size:12px;opacity:0.6;margin:0 0 6px;">Options:</p><div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+            p.variants.map(v => '<span style="padding:4px 10px;border:1px solid ' + CARD_BORDER + ';border-radius:4px;font-size:12px;">' + (v.name || v.label || JSON.stringify(v)) + '</span>').join('') + '</div></div>'
+          : '';
+        
+        const stockHtml = p.stock !== undefined && p.stock !== -1
+          ? '<p style="font-size:12px;margin:8px 0 0;' + (p.stock < 5 ? 'color:#EF4444;' : 'opacity:0.5;') + '">' + (p.stock === 0 ? 'Out of stock' : p.stock + ' left in stock') + '</p>'
+          : '';
+        
+        const modal = document.createElement('div');
+        modal.id = 'ws-product-modal';
+        modal.style.cssText = 'position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);';
+        modal.onclick = function(e) { if (e.target === modal) wsShop.closeDetail(); };
+        modal.innerHTML = '<div style="background:' + BG + ';color:' + TEXT + ';border:1px solid ' + CARD_BORDER + ';border-radius:12px;max-width:560px;width:90vw;max-height:85vh;overflow-y:auto;padding:24px;position:relative;">' +
+          '<button onclick="wsShop.closeDetail()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:' + TEXT + ';font-size:22px;cursor:pointer;opacity:0.5;">&times;</button>' +
+          mainImg +
+          (p.images && p.images.length > 1 ? imgsHtml : '') +
+          '<h2 style="margin:0 0 8px;font-size:22px;">' + p.name + '</h2>' +
+          '<p style="font-size:24px;font-weight:700;color:' + PRIMARY + ';margin:0 0 12px;">' + sym + (p.price || 0).toFixed(2) + '</p>' +
+          '<p style="font-size:14px;opacity:0.7;line-height:1.6;margin:0 0 12px;">' + (p.description || '') + '</p>' +
+          variantsHtml + stockHtml +
+          '<button onclick="wsShop.addToCart({id:\'' + p.id + '\',name:\'' + p.name.replace(/'/g, '') + '\',price:' + (p.price || 0) + ',currency:\'' + (p.currency || 'GBP') + '\'}); wsShop.closeDetail();" style="width:100%;margin-top:16px;padding:12px;background:' + PRIMARY + ';color:#050505;border:none;border-radius:' + BTN_RADIUS + ';font-weight:600;cursor:pointer;font-size:15px;' + (p.stock === 0 ? 'opacity:0.4;pointer-events:none;' : '') + '">' + (p.stock === 0 ? 'Out of Stock' : 'Add to Cart') + '</button>' +
+          '</div>';
+        document.body.appendChild(modal);
+      }
+      
+      function showOrderSuccess(orderId, email) {
+        const main = document.querySelector("main") || document.body;
+        const overlay = document.createElement("div");
+        overlay.style.cssText = "position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;background:" + BG + ";";
+        overlay.innerHTML = '<div style="text-align:center;max-width:480px;padding:40px;">' +
+          '<div style="width:64px;height:64px;margin:0 auto 20px;border-radius:50%;background:' + PRIMARY + '20;display:flex;align-items:center;justify-content:center;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="' + PRIMARY + '" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div>' +
+          '<h1 style="margin:0 0 8px;font-size:28px;">Order Confirmed!</h1>' +
+          '<p style="opacity:0.6;margin:0 0 16px;">Thank you for your purchase.</p>' +
+          (orderId ? '<p style="font-size:13px;opacity:0.5;margin:0 0 8px;">Order ID: <strong>' + orderId + '</strong></p>' : '') +
+          (email ? '<p style="font-size:13px;opacity:0.5;margin:0 0 20px;">Confirmation sent to <strong>' + email + '</strong></p>' : '') +
+          '<button onclick="this.closest(\'div[style]\').remove();" style="padding:10px 24px;background:' + PRIMARY + ';color:#050505;border:none;border-radius:' + BTN_RADIUS + ';font-weight:600;cursor:pointer;font-size:14px;">Continue Shopping</button>' +
+          '<p style="margin:16px 0 0;font-size:12px;opacity:0.4;"><a href="#" onclick="event.preventDefault();this.closest(\'div[style]\').remove();wsShop.showTracker();" style="color:' + PRIMARY + ';text-decoration:none;">Track your order anytime</a></p></div>';
+        document.body.appendChild(overlay);
+      }
+      
+      async function loadProducts() {
+        const grid = document.getElementById("ws-shop-products");
+        try {
+          const res = await _wsFetch(WS_API + "/shop/" + SITE_ID + "/products/public");
+          if (!res.ok) {
+            console.error("[WebSorted shop] HTTP " + res.status + " from " + WS_API);
+            if (grid) grid.innerHTML = '<p style="text-align:center;opacity:0.5;">Unable to load products (' + res.status + ')</p>';
+            return;
+          }
+          const products = await res.json();
+          allProducts = Array.isArray(products) ? products : [];
+          if (!grid || allProducts.length === 0) {
+            if (grid) grid.innerHTML = '<p style="text-align:center;opacity:0.5;">No products available</p>';
+            return;
+          }
+          const sym = getSym();
+          grid.innerHTML = allProducts.map(function(p) {
+            const imgHtml = p.images && p.images.length > 0
+              ? '<img src="' + p.images[0] + '" alt="' + p.name + '" style="width:100%;height:200px;object-fit:cover;cursor:pointer;" onclick="wsShop.viewProduct(\''+p.id+'\')">'
+              : '<div style="width:100%;height:200px;background:' + CARD_BORDER + ';display:flex;align-items:center;justify-content:center;opacity:0.3;cursor:pointer;" onclick="wsShop.viewProduct(\''+p.id+'\')">No image</div>';
+            const eName = p.name.replace(/'/g, "");
+            // Stock badges: -1 = unlimited (hide), 0 = sold-out, 1..5 = "Only N left"
+            const stock = (typeof p.stock === 'number') ? p.stock : -1;
+            const isSoldOut = stock === 0;
+            const isLow = stock > 0 && stock <= 5;
+            let badgeHtml = '';
+            if (isSoldOut) {
+              badgeHtml = '<div style="position:absolute;top:8px;left:8px;z-index:2;padding:4px 10px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;background:#111;color:#fff;border:1px solid rgba(255,255,255,0.18);">Sold out</div>';
+            } else if (isLow) {
+              badgeHtml = '<div style="position:absolute;top:8px;left:8px;z-index:2;display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;background:' + PRIMARY + '1f;color:' + PRIMARY + ';border:1px solid ' + PRIMARY + '55;">'
+                + '<span style="display:inline-block;width:4px;height:4px;border-radius:50%;background:' + PRIMARY + ';"></span>Only ' + stock + ' left</div>';
+            }
+            const cardOpacity = isSoldOut ? 'opacity:0.55;' : '';
+            const btnStyle = isSoldOut
+              ? 'padding:6px 14px;background:#444;color:#aaa;border:none;border-radius:' + BTN_RADIUS + ';font-weight:600;cursor:not-allowed;font-size:12px;'
+              : 'padding:6px 14px;background:' + PRIMARY + ';color:#050505;border:none;border-radius:' + BTN_RADIUS + ';font-weight:600;cursor:pointer;font-size:12px;';
+            const btnLabel = isSoldOut ? 'Sold out' : 'Add to Cart';
+            const btnOnClick = isSoldOut ? '' : 'onclick="wsShop.addToCart({id:\''+p.id+'\',name:\''+eName+'\',price:'+p.price+',currency:\''+(p.currency||'GBP')+'\'})"';
+            return '<div class="ws-product-card" style="position:relative;background:' + CARD_BG + ';border:1px solid ' + CARD_BORDER + ';border-radius:8px;overflow:hidden;">' +
+              badgeHtml +
+              '<div style="' + cardOpacity + '">' +
+              imgHtml +
+              '<div style="padding:14px;">' +
+              '<h3 style="margin:0 0 4px;font-size:14px;cursor:pointer;" onclick="wsShop.viewProduct(\''+p.id+'\')">' + p.name + '</h3>' +
+              '<p style="margin:0 0 10px;font-size:12px;opacity:0.6;">' + (p.description || '').substring(0, 80) + '</p>' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+              '<span style="font-weight:700;color:' + PRIMARY + ';font-size:16px;">' + sym + (p.price || 0).toFixed(2) + '</span>' +
+              '<button ' + btnOnClick + ' ' + (isSoldOut ? 'disabled' : '') + ' style="' + btnStyle + '">' + btnLabel + '</button>' +
+              '</div></div></div></div>';
+          }).join('');
+        } catch(e) {
+          console.error("[WebSorted shop] fetch failed for " + WS_API, e);
+          const grid = document.getElementById("ws-shop-products");
+          if (grid) grid.innerHTML = '<p style="text-align:center;opacity:0.5;">Unable to load products. Check your connection and try again.</p>';
+        }
+      }
+      
+      // Check if returning from Stripe success
+      (function checkReturn() {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("checkout") === "success") {
+          const oid = localStorage.getItem("ws_order_id") || "";
+          const em = localStorage.getItem("ws_order_email") || "";
+          localStorage.removeItem("ws_order_id");
+          localStorage.removeItem("ws_order_email");
+          cart = [];
+          showOrderSuccess(oid, em);
+          history.replaceState(null, "", window.location.pathname);
+        }
+      })();
+      
+      // Order tracking
+      window.wsShop.showTracker = function() {
+        const existing = document.getElementById("ws-track-modal");
+        if (existing) existing.remove();
+        const modal = document.createElement("div");
+        modal.id = "ws-track-modal";
+        modal.style.cssText = "position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);backdrop-filter:blur(4px);";
+        modal.onclick = function(e) { if (e.target === modal) modal.remove(); };
+        modal.innerHTML = '<div style="background:'+BG+';color:'+TEXT+';border:1px solid '+CARD_BORDER+';border-radius:12px;max-width:420px;width:90vw;padding:24px;position:relative;">' +
+          '<button onclick="this.closest(\'#ws-track-modal\').remove()" style="position:absolute;top:12px;right:12px;background:none;border:none;color:'+TEXT+';font-size:22px;cursor:pointer;opacity:0.5;">&times;</button>' +
+          '<h2 style="margin:0 0 4px;font-size:20px;">Track Your Order</h2>' +
+          '<p style="margin:0 0 16px;font-size:13px;opacity:0.6;">Enter your order number and email to check status.</p>' +
+          '<input id="ws-track-order" placeholder="Order number (e.g. WS-A1B2C3D4)" style="width:100%;padding:10px 12px;margin-bottom:8px;border:1px solid '+CARD_BORDER+';border-radius:6px;background:transparent;color:'+TEXT+';font-size:13px;box-sizing:border-box;outline:none;" onfocus="this.style.borderColor=\''+PRIMARY+'\'"/>' +
+          '<input id="ws-track-email" type="email" placeholder="Email used at checkout" style="width:100%;padding:10px 12px;margin-bottom:12px;border:1px solid '+CARD_BORDER+';border-radius:6px;background:transparent;color:'+TEXT+';font-size:13px;box-sizing:border-box;outline:none;" onfocus="this.style.borderColor=\''+PRIMARY+'\'"/>' +
+          '<button id="ws-track-btn" onclick="wsShop.trackOrder()" style="width:100%;padding:10px;background:'+PRIMARY+';color:#050505;border:none;border-radius:'+BTN_RADIUS+';font-weight:600;cursor:pointer;font-size:14px;">Track Order</button>' +
+          '<div id="ws-track-result" style="margin-top:16px;"></div>' +
+          '</div>';
+        document.body.appendChild(modal);
+      };
+      
+      window.wsShop.trackOrder = async function() {
+        const orderNum = (document.getElementById("ws-track-order")?.value || "").trim();
+        const email = (document.getElementById("ws-track-email")?.value || "").trim();
+        const resultDiv = document.getElementById("ws-track-result");
+        const btn = document.getElementById("ws-track-btn");
+        if (!orderNum || !email) {
+          if (resultDiv) resultDiv.innerHTML = '<p style="color:#EF4444;font-size:13px;">Please enter both order number and email.</p>';
+          return;
+        }
+        if (btn) { btn.textContent = "Checking..."; btn.disabled = true; }
+        try {
+          const res = await fetch(WS_API + "/shop/" + SITE_ID + "/orders/track?order_number=" + encodeURIComponent(orderNum) + "&email=" + encodeURIComponent(email));
+          if (!res.ok) {
+            const err = await res.json();
+            if (resultDiv) resultDiv.innerHTML = '<p style="color:#EF4444;font-size:13px;">' + (err.detail || "Order not found.") + '</p>';
+            return;
+          }
+          const order = await res.json();
+          const statuses = ["pending","confirmed","processing","shipped","delivered"];
+          const currentIdx = statuses.indexOf(order.status);
+          const sym = getSym();
+          
+          const timeline = statuses.map(function(s, i) {
+            const done = i <= currentIdx;
+            const active = i === currentIdx;
+            const labels = {pending:"Pending",confirmed:"Confirmed",processing:"Processing",shipped:"Shipped",delivered:"Delivered"};
+            return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;">' +
+              '<div style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;' +
+              (done ? 'background:'+PRIMARY+';' : 'background:transparent;border:2px solid '+CARD_BORDER+';') +
+              (active ? 'box-shadow:0 0 0 3px '+PRIMARY+'30;' : '') + '">' +
+              (done ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#050505" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' : '') +
+              '</div>' +
+              '<span style="font-size:13px;font-weight:' + (active ? '600' : '400') + ';opacity:' + (done ? '1' : '0.4') + ';">' + labels[s] + '</span>' +
+              '</div>';
+          }).join('');
+          
+          const itemsHtml = (order.items || []).map(function(it) {
+            return '<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:12px;"><span>' + it.name + ' x' + it.quantity + '</span><span>' + sym + (it.price * it.quantity).toFixed(2) + '</span></div>';
+          }).join('');
+          
+          if (resultDiv) resultDiv.innerHTML =
+            '<div style="border-top:1px solid '+CARD_BORDER+';padding-top:16px;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><strong style="font-size:14px;">' + order.order_number + '</strong><span style="font-size:11px;opacity:0.5;">' + new Date(order.created_at).toLocaleDateString() + '</span></div>' +
+            timeline +
+            '<div style="margin-top:12px;padding-top:12px;border-top:1px solid '+CARD_BORDER+';">' +
+            itemsHtml +
+            '<div style="display:flex;justify-content:space-between;margin-top:8px;font-weight:700;"><span>Total</span><span>' + sym + (order.total || 0).toFixed(2) + '</span></div>' +
+            '</div></div>';
+        } catch(e) {
+          if (resultDiv) resultDiv.innerHTML = '<p style="color:#EF4444;font-size:13px;">Unable to track order. Try again later.</p>';
+        } finally {
+          if (btn) { btn.textContent = "Track Order"; btn.disabled = false; }
+        }
+      };
+      
+      // Resolve API base (same-origin > baked > prod fallback) THEN load products.
+      _wsResolveApi().finally(function() { loadProducts(); });
+
+      // Handle Product Spotlight buy buttons via event delegation
+      // (works even if the buttons are added later or the per-element handler missed them).
+      document.addEventListener('click', function(e) {
+        const btn = e.target.closest && e.target.closest('[data-spotlight-product]');
+        if (!btn) return;
+        e.preventDefault();
+        const pid = btn.getAttribute('data-spotlight-product');
+        if (!pid) return;
+        const product = allProducts.find(function(p) { return p.id === pid; });
+        if (product) {
+          wsShop.addToCart({ id: product.id, name: product.name.replace(/'/g, ''), price: product.price, currency: product.currency || 'GBP' });
+          wsShop.toggleCart();
+        } else {
+          // Products haven't loaded yet — scroll to shop section so user lands somewhere useful instead of top.
+          const shopGrid = document.getElementById('ws-shop-products');
+          if (shopGrid) shopGrid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    })();
+    </script>
+    <script>
+    function wsContactSubmit(form){
+      var btn=form.querySelector('button[type="submit"]');
+      var status=form.querySelector('.contact-status');
+      btn.disabled=true;btn.textContent='Sending...';
+      status.style.display='none';
+      fetch("https://websorted.uk/api/websites/42b75ab7-c51f-440d-9d70-7f9ec21c6a3b/contact",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          name:form.name.value,
+          email:form.email.value,
+          message:form.message.value
+        })
+      }).then(function(r){return r.json()}).then(function(d){
+        if(d.success){
+          status.style.display='block';status.style.color='#A8A29E';
+          status.textContent='Message sent successfully!';
+          form.reset();
+        }else{
+          status.style.display='block';status.style.color='#ef4444';
+          status.textContent=d.detail||'Failed to send. Please try again.';
+        }
+      }).catch(function(){
+        status.style.display='block';status.style.color='#ef4444';
+        status.textContent='Failed to send. Please try again.';
+      }).finally(function(){
+        btn.disabled=false;btn.textContent='Send Message';
+      });
+      return false;
+    }
+    </script>
 
 <div class="ws-consent-banner" id="ws-consent-banner" role="dialog" aria-labelledby="ws-consent-title" aria-describedby="ws-consent-desc" data-testid="cookie-banner">
   <h3 id="ws-consent-title">We value your privacy</h3>

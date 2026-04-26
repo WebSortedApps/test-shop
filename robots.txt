@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://arzcakes.github.io/test-shop/sitemap.xml

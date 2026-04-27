@@ -228,6 +228,15 @@ Distin</a>
           updateCartBadge();
           renderCart();
         },
+        selectShipping: function(optionId) {
+          SELECTED_SHIPPING_ID = optionId;
+          renderCart();
+        },
+        setShipCountry: function(code) {
+          SHIP_COUNTRY = (code || "").toUpperCase();
+          try { localStorage.setItem("ws_ship_country", SHIP_COUNTRY); } catch (_) {}
+          renderCart();
+        },
         viewProduct: function(productId) {
           const p = allProducts.find(i => i.id === productId);
           if (!p) return;
@@ -246,7 +255,17 @@ Distin</a>
             return;
           }
           const checkoutBtn = document.getElementById("ws-checkout-btn");
+          const errBox = document.getElementById("ws-checkout-error");
+          if (errBox) { errBox.style.display = "none"; errBox.textContent = ""; }
           if (checkoutBtn) { checkoutBtn.textContent = "Processing..."; checkoutBtn.disabled = true; }
+          function showCheckoutError(msg) {
+            if (errBox) {
+              errBox.textContent = msg;
+              errBox.style.display = "block";
+            } else {
+              alert(msg);
+            }
+          }
           try {
             const res = await fetch(WS_API + "/shop/" + SITE_ID + "/checkout", {
               method: "POST",
@@ -254,7 +273,9 @@ Distin</a>
               body: JSON.stringify({
                 items: cart.map(i => ({ product_id: i.id, quantity: i.qty })),
                 customer_email: email,
-                origin_url: ORIGIN
+                origin_url: ORIGIN,
+                shipping_option_id: SELECTED_SHIPPING_ID || null,
+                shipping_country: SHIP_COUNTRY || null
               })
             });
             const data = await res.json();
@@ -263,13 +284,21 @@ Distin</a>
               localStorage.setItem("ws_order_email", email);
               window.location.href = data.checkout_url;
             }
-            else if (data.detail) { alert(data.detail); }
+            else if (data.detail) {
+              const raw = String(data.detail);
+              // Detect missing/invalid Stripe configuration and show a friendly message.
+              if (/Invalid API Key|stripe.*not configured|sk_test_\*\*\*\*|api.key.*provided/i.test(raw)) {
+                showCheckoutError("Payments aren't set up for this shop yet. Please contact the shop owner.");
+              } else {
+                showCheckoutError(raw);
+              }
+            }
             else {
               cart = []; updateCartBadge(); renderCart();
               showOrderSuccess(data.order_id, email);
             }
           } catch(e) {
-            alert("Checkout failed. Please try again.");
+            showCheckoutError("Checkout failed. Please check your connection and try again.");
           } finally {
             if (checkoutBtn) { checkoutBtn.textContent = "Checkout"; checkoutBtn.disabled = false; }
           }
@@ -289,16 +318,137 @@ Distin</a>
         return c === "GBP" ? "\u00a3" : c === "USD" ? "$" : c === "EUR" ? "\u20ac" : c + " ";
       }
       
+      function _shippingOptionsHTML(subtotal) {
+        if (!SHIPPING_OPTIONS || SHIPPING_OPTIONS.length === 0) return '';
+        const sym = getSym();
+        // Build country dropdown — only include codes the merchant has at least one option for, plus the customer's current selection.
+        const merchantCountries = new Set();
+        let hasGlobal = false;
+        SHIPPING_OPTIONS.forEach(function(o) {
+          const c = o.countries || [];
+          if (!c.length) hasGlobal = true; else c.forEach(function(cc) { merchantCountries.add(cc); });
+        });
+        const showPicker = merchantCountries.size > 0; // only when zones are configured
+        // Filter the rendered options by the selected country.
+        const visible = SHIPPING_OPTIONS.filter(function(o) {
+          const c = o.countries || [];
+          if (!c.length) return true; // global
+          return c.indexOf(SHIP_COUNTRY) !== -1;
+        });
+        // If selected country has 0 matches, prompt the customer to pick another.
+        if (visible.length === 0) {
+          const countryDropdown = _renderCountryPicker(merchantCountries, hasGlobal);
+          return ''
+            + '<div style="margin:8px 0 4px;font-size:11px;font-weight:600;opacity:0.7;text-transform:uppercase;letter-spacing:0.5px;">Shipping</div>'
+            + (showPicker ? countryDropdown : '')
+            + '<div data-testid="no-shipping-for-country" style="padding:8px 10px;border:1px dashed ' + CARD_BORDER + ';border-radius:6px;font-size:11px;opacity:0.7;text-align:center;">No shipping options for ' + SHIP_COUNTRY + '. Please pick a different country above.</div>';
+        }
+        // Auto-select first visible option if current selection isn't visible.
+        if (SELECTED_SHIPPING_ID && !visible.find(function(o) { return o.id === SELECTED_SHIPPING_ID; })) {
+          SELECTED_SHIPPING_ID = "";
+        }
+        const rows = visible.map(function(o) {
+          const meetsMin = !(o.type === 'free' && (o.min_subtotal || 0) > subtotal);
+          const disabled = !meetsMin;
+          const checked = SELECTED_SHIPPING_ID === o.id ? 'checked' : '';
+          const label = o.type === 'pickup' ? 'Collection' : (o.type === 'free' ? 'Free' : 'Delivery');
+          const cost = o.type === 'free' ? 'Free' : sym + (Number(o.cost || 0).toFixed(2));
+          const sub = o.type === 'pickup' && o.address ? '<div style="font-size:10px;opacity:0.6;margin-top:2px;">' + o.address + '</div>' : (
+            o.type === 'free' && (o.min_subtotal || 0) > 0
+              ? '<div style="font-size:10px;opacity:0.6;margin-top:2px;">' + (meetsMin ? 'Qualifies!' : ('Spend ' + sym + ((o.min_subtotal - subtotal).toFixed(2)) + ' more')) + '</div>'
+              : ''
+          );
+          return ''
+            + '<label data-testid="shipping-option-' + o.id + '" style="display:flex;gap:10px;padding:10px;border:1px solid ' + CARD_BORDER + ';border-radius:6px;margin-bottom:6px;cursor:' + (disabled ? 'not-allowed' : 'pointer') + ';opacity:' + (disabled ? '0.45' : '1') + ';">'
+            +   '<input type="radio" name="ws-shipping-opt" value="' + o.id + '" ' + checked + (disabled ? ' disabled' : '') + ' onchange="wsShop.selectShipping(\''+o.id+'\')" style="margin-top:2px;" />'
+            +   '<div style="flex:1;">'
+            +     '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:500;">'
+            +       '<span>' + (o.name || label) + '</span>'
+            +       '<span>' + cost + '</span>'
+            +     '</div>'
+            +     sub
+            +   '</div>'
+            + '</label>';
+        }).join('');
+        return ''
+          + '<div style="margin:8px 0 4px;font-size:11px;font-weight:600;opacity:0.7;text-transform:uppercase;letter-spacing:0.5px;">Shipping</div>'
+          + (showPicker ? _renderCountryPicker(merchantCountries, hasGlobal) : '')
+          + rows;
+      }
+
+      function _renderCountryPicker(merchantCountries, hasGlobal) {
+        // Build a deduped list of country codes to show: merchant's configured codes
+        // plus the currently-selected one (in case it's outside merchant's list, so user can change it).
+        const codes = new Set(merchantCountries);
+        codes.add(SHIP_COUNTRY);
+        // Pre-known names + alpha sort
+        const known = new Map(COUNTRY_LIST);
+        const ordered = Array.from(codes).map(function(c) { return [c, known.get(c) || c]; })
+          .sort(function(a, b) { return a[1].localeCompare(b[1]); });
+        const opts = ordered.map(function(p) {
+          const sel = p[0] === SHIP_COUNTRY ? 'selected' : '';
+          return '<option value="' + p[0] + '" ' + sel + '>' + p[1] + '</option>';
+        }).join('');
+        return ''
+          + '<div data-testid="ship-country-picker" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;">'
+          +   '<span style="opacity:0.7;">Ship to:</span>'
+          +   '<select onchange="wsShop.setShipCountry(this.value)" style="flex:1;background:transparent;color:' + TEXT + ';border:1px solid ' + CARD_BORDER + ';border-radius:4px;padding:4px 6px;font-size:12px;">'
+          +     opts
+          +   '</select>'
+          +   (hasGlobal ? '<span style="font-size:10px;opacity:0.5;">+ worldwide</span>' : '')
+          + '</div>';
+      }
+
+      function _selectedShippingCost(subtotal) {
+        const o = (SHIPPING_OPTIONS || []).find(function(x) { return x.id === SELECTED_SHIPPING_ID; });
+        if (!o) return 0;
+        if (o.type === 'free' && (o.min_subtotal || 0) > subtotal) return 0;
+        return Number(o.cost || 0);
+      }
+
+      function _sandboxBannerHTML() {
+        if (!SHOP_META || !SHOP_META.is_sandbox) return '';
+        return ''
+          + '<div data-testid="sandbox-banner" style="margin:-16px -16px 12px;padding:10px 14px;background:linear-gradient(135deg,#FFB800,#FF8A00);color:#1a1a1a;font-size:12px;font-weight:600;text-align:center;letter-spacing:0.3px;">'
+          +   '🧪 TEST MODE — No real payment will be taken'
+          + '</div>'
+          + '<details style="margin:-4px 0 12px;background:rgba(255,184,0,0.08);border:1px solid rgba(255,184,0,0.3);border-radius:8px;overflow:hidden;" data-testid="sandbox-tutorial">'
+          +   '<summary style="padding:10px 12px;cursor:pointer;font-size:12px;font-weight:600;color:#FFB800;list-style:none;display:flex;align-items:center;gap:6px;">'
+          +     '<span style="display:inline-block;width:14px;height:14px;background:#FFB800;color:#1a1a1a;border-radius:50%;font-size:10px;text-align:center;line-height:14px;font-weight:700;">i</span>'
+          +     'How to test this checkout'
+          +     '<span style="margin-left:auto;font-size:10px;opacity:0.7;">▼</span>'
+          +   '</summary>'
+          +   '<div style="padding:0 12px 12px;font-size:11px;line-height:1.6;opacity:0.9;">'
+          +     '<p style="margin:6px 0;"><strong>This is a demo / sandbox shop.</strong> Square will simulate a real checkout — your card will <em>not</em> be charged.</p>'
+          +     '<p style="margin:8px 0 4px;font-weight:600;">Use any of these test cards:</p>'
+          +     '<div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:8px;margin:4px 0;font-family:ui-monospace,Menlo,monospace;font-size:10.5px;line-height:1.7;">'
+          +       '<div><span style="opacity:0.6;">Visa  </span><strong>4111 1111 1111 1111</strong></div>'
+          +       '<div><span style="opacity:0.6;">Mastercard  </span><strong>5105 1051 0510 5100</strong></div>'
+          +       '<div><span style="opacity:0.6;">Amex  </span><strong>3782 822463 10005</strong></div>'
+          +     '</div>'
+          +     '<p style="margin:6px 0;">'
+          +       '<strong>CVV:</strong> any 3 digits (4 for Amex) · <strong>Expiry:</strong> any future date · <strong>ZIP:</strong> any'
+          +     '</p>'
+          +     '<p style="margin:6px 0;font-size:10px;opacity:0.7;">'
+          +       'To simulate a decline, use <code>4000 0000 0000 0002</code>. Full Square test data: <a href="https://developer.squareup.com/docs/devtools/sandbox/payments" target="_blank" rel="noopener" style="color:#FFB800;">developer.squareup.com</a>'
+          +     '</p>'
+          +   '</div>'
+          + '</details>';
+      }
+
       function renderCart() {
         const drawer = document.getElementById("ws-shop-cart-drawer");
         if (!drawer) return;
         if (cart.length === 0) {
-          drawer.innerHTML = '<p style="text-align:center;padding:24px;opacity:0.5;">Cart is empty</p>';
+          drawer.innerHTML = '<div style="padding:16px;">' + _sandboxBannerHTML() + '<p style="text-align:center;padding:24px;opacity:0.5;">Cart is empty</p></div>';
           return;
         }
         const total = cart.reduce((s, i) => s + (i.price * i.qty), 0);
+        const shipping = _selectedShippingCost(total);
+        const grand = total + shipping;
         const sym = getSym();
         drawer.innerHTML = '<div style="padding:16px;">' +
+          _sandboxBannerHTML() +
           '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h3 style="margin:0;font-size:16px;">Cart</h3><button onclick="wsShop.toggleCart()" style="background:none;border:none;color:' + TEXT + ';cursor:pointer;font-size:18px;opacity:0.5;">&times;</button></div>' +
           cart.map(i => '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid ' + CARD_BORDER + ';">' +
             '<div style="flex:1;"><p style="margin:0;font-size:13px;font-weight:600;">' + i.name + '</p>' +
@@ -309,10 +459,13 @@ Distin</a>
             '<button onclick="wsShop.updateQty(\''+i.id+'\', 1)" style="width:24px;height:24px;border:1px solid ' + CARD_BORDER + ';background:transparent;color:' + TEXT + ';border-radius:4px;cursor:pointer;">+</button>' +
             '</div></div>'
           ).join('') +
+          _shippingOptionsHTML(total) +
           '<div style="margin-top:12px;padding-top:12px;border-top:2px solid ' + PRIMARY + ';">' +
-          '<div style="display:flex;justify-content:space-between;margin-bottom:12px;"><strong>Total</strong><strong>' + sym + total.toFixed(2) + '</strong></div>' +
+          (shipping > 0 ? '<div style="display:flex;justify-content:space-between;font-size:12px;opacity:0.7;margin-bottom:4px;"><span>Subtotal</span><span>' + sym + total.toFixed(2) + '</span></div><div style="display:flex;justify-content:space-between;font-size:12px;opacity:0.7;margin-bottom:8px;"><span>Shipping</span><span>' + sym + shipping.toFixed(2) + '</span></div>' : '') +
+          '<div style="display:flex;justify-content:space-between;margin-bottom:12px;"><strong>Total</strong><strong>' + sym + grand.toFixed(2) + '</strong></div>' +
           '<input id="ws-checkout-email" type="email" placeholder="Your email for order updates" style="width:100%;padding:8px 12px;margin-bottom:8px;border:1px solid ' + CARD_BORDER + ';border-radius:6px;background:transparent;color:' + TEXT + ';font-size:13px;box-sizing:border-box;outline:none;" onfocus="this.style.border=\'1px solid ' + PRIMARY + '\'"/>' +
           '<button id="ws-checkout-btn" onclick="wsShop.checkout()" style="width:100%;padding:10px;background:' + PRIMARY + ';color:#050505;border:none;border-radius:' + BTN_RADIUS + ';font-weight:600;cursor:pointer;font-size:14px;">Checkout</button>' +
+          '<div id="ws-checkout-error" role="alert" style="display:none;margin-top:10px;padding:10px 12px;background:rgba(239,68,68,0.10);border:1px solid rgba(239,68,68,0.35);border-radius:6px;color:#FCA5A5;font-size:12px;line-height:1.4;"></div>' +
           '<a href="https://websorted.uk" target="_blank" rel="noopener" style="display:block;text-align:center;margin-top:10px;font-size:10px;opacity:0.4;text-decoration:none;color:' + TEXT + ';">Shop powered by <strong style="color:' + PRIMARY + ';">WebSorted</strong></a>' +
           '</div></div>';
       }
@@ -518,8 +671,47 @@ Distin</a>
         }
       };
       
-      // Resolve API base (same-origin > baked > prod fallback) THEN load products.
-      _wsResolveApi().finally(function() { loadProducts(); });
+      // Resolve API base (same-origin > baked > prod fallback) THEN load products + meta.
+      let SHOP_META = { is_sandbox: false, gateway: "", business_name: "" };
+      let SHIPPING_OPTIONS = [];
+      let SELECTED_SHIPPING_ID = "";
+      // Top 30-ish ISO countries — covers most shop usage. Merchants can configure any 2-letter code,
+      // but this list backs the dropdown shown to customers.
+      const COUNTRY_LIST = [
+        ["GB","United Kingdom"],["US","United States"],["IE","Ireland"],
+        ["FR","France"],["DE","Germany"],["ES","Spain"],["IT","Italy"],["NL","Netherlands"],
+        ["BE","Belgium"],["LU","Luxembourg"],["AT","Austria"],["CH","Switzerland"],
+        ["DK","Denmark"],["SE","Sweden"],["NO","Norway"],["FI","Finland"],["IS","Iceland"],
+        ["PT","Portugal"],["PL","Poland"],["CZ","Czechia"],["GR","Greece"],
+        ["CA","Canada"],["AU","Australia"],["NZ","New Zealand"],
+        ["JP","Japan"],["SG","Singapore"],["HK","Hong Kong"],
+        ["AE","United Arab Emirates"],["SA","Saudi Arabia"],
+        ["IN","India"],["BR","Brazil"],["MX","Mexico"],["ZA","South Africa"],
+      ];
+      function _detectInitialCountry() {
+        try {
+          const stored = localStorage.getItem("ws_ship_country");
+          if (stored && /^[A-Z]{2}$/.test(stored)) return stored;
+          const lang = (navigator.language || "en-GB").split("-")[1];
+          if (lang && lang.length === 2) return lang.toUpperCase();
+        } catch (_) {}
+        return "GB";
+      }
+      let SHIP_COUNTRY = _detectInitialCountry();
+      async function loadMeta() {
+        try {
+          const r = await _wsFetch(WS_API + "/shop/" + SITE_ID + "/public-meta");
+          if (r.ok) SHOP_META = await r.json();
+        } catch (_) {}
+        try {
+          const r2 = await _wsFetch(WS_API + "/shop/" + SITE_ID + "/shipping-options/public");
+          if (r2.ok) {
+            const j = await r2.json();
+            SHIPPING_OPTIONS = (j && j.shipping_options) || [];
+          }
+        } catch (_) {}
+      }
+      _wsResolveApi().finally(function() { loadMeta(); loadProducts(); });
 
       // Handle Product Spotlight buy buttons via event delegation
       // (works even if the buttons are added later or the per-element handler missed them).

@@ -141,9 +141,9 @@ Distin</a>
             <div id="ws-shop-products" class="ws-shop-grid">
                 <p style="text-align:center;opacity:0.5;">Loading products...</p>
             </div>
-            <div id="ws-shop-cart-float" class="ws-cart-float" style="display:none;" onclick="wsShop.toggleCart()">
+            <div id="ws-shop-cart-float" class="ws-cart-float" onclick="wsShop.toggleCart()" data-testid="cart-float-btn" title="View cart" aria-label="View cart">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
-                <span id="ws-cart-count">0</span>
+                <span id="ws-cart-count" style="display:none;">0</span>
             </div>
             <div id="ws-shop-cart-drawer" class="ws-cart-drawer" style="display:none;"></div>
         </div>
@@ -248,7 +248,25 @@ Distin</a>
       
       let cart = [];
       let allProducts = [];
-      
+
+      // ---- Cart persistence -------------------------------------------------
+      // Restore from localStorage on page load so visitors don't lose their cart
+      // when navigating away from the shop section. Saves on every mutation.
+      const WS_CART_KEY = "ws_cart_" + SITE_ID;
+      try {
+        const raw = localStorage.getItem(WS_CART_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            // Drop entries older than 7 days (gentle TTL)
+            cart = parsed.filter(function(i) { return i && i.id && i.qty > 0; });
+          }
+        }
+      } catch (_) { cart = []; }
+      function _persistCart() {
+        try { localStorage.setItem(WS_CART_KEY, JSON.stringify(cart)); } catch (_) {}
+      }
+
       window.wsShop = {
         toggleCart: function() {
           const d = document.getElementById("ws-shop-cart-drawer");
@@ -259,6 +277,7 @@ Distin</a>
           const existing = cart.find(i => i.id === product.id);
           if (existing) { existing.qty += 1; }
           else { cart.push({ ...product, qty: 1 }); }
+          _persistCart();
           updateCartBadge();
           renderCart();
         },
@@ -267,6 +286,7 @@ Distin</a>
           if (!item) return;
           item.qty += delta;
           if (item.qty <= 0) { cart = cart.filter(i => i.id !== productId); }
+          _persistCart();
           updateCartBadge();
           renderCart();
         },
@@ -324,7 +344,14 @@ Distin</a>
             if (data.checkout_url) {
               localStorage.setItem("ws_order_id", data.order_id || "");
               localStorage.setItem("ws_order_email", email);
-              window.location.href = data.checkout_url;
+              try { localStorage.removeItem(WS_CART_KEY); } catch (_) {}
+              if (data.demo) {
+                // Demo flow — let the prospect experience a fake card form
+                // before bouncing to the confirmation page.
+                showDemoCardForm(data.checkout_url, email);
+              } else {
+                window.location.href = data.checkout_url;
+              }
             }
             else if (data.detail) {
               const raw = String(data.detail);
@@ -336,7 +363,7 @@ Distin</a>
               }
             }
             else {
-              cart = []; updateCartBadge(); renderCart();
+              cart = []; _persistCart(); updateCartBadge(); renderCart();
               showOrderSuccess(data.order_id, email);
             }
           } catch(e) {
@@ -351,8 +378,14 @@ Distin</a>
         const total = cart.reduce((s, i) => s + i.qty, 0);
         const badge = document.getElementById("ws-cart-count");
         const floatBtn = document.getElementById("ws-shop-cart-float");
-        if (badge) badge.textContent = total;
-        if (floatBtn) floatBtn.style.display = total > 0 ? "flex" : "none";
+        if (badge) {
+          badge.textContent = total;
+          // Hide just the count bubble when empty so the button doesn't say "0"
+          badge.style.display = total > 0 ? "flex" : "none";
+        }
+        // Always show the cart button so visitors can find their cart even
+        // before adding anything.
+        if (floatBtn) floatBtn.style.display = "flex";
       }
       
       function getSym() {
@@ -552,8 +585,233 @@ Distin</a>
         document.body.appendChild(modal);
       }
       
+      // Demo-mode fake checkout — visually mimics Square's hosted checkout so
+      // prospects get a near-realistic feel of the live flow, but everything
+      // runs on the merchant's own domain. NO data is sent anywhere; the
+      // inputs are decorative and the "Pay" button just redirects to the demo
+      // confirmation URL.
+      function showDemoCardForm(redirectUrl, email) {
+        // Parse total + currency from the redirect URL query params
+        let total = "0.00", currency = "GBP";
+        try {
+          const u = new URL(redirectUrl, window.location.origin);
+          total = u.searchParams.get("total") || total;
+          currency = u.searchParams.get("currency") || currency;
+        } catch (_) {}
+        const sym = currency === "USD" ? "$" : currency === "EUR" ? "\u20ac" : "\u00a3";
+
+        // Square-checkout-styled palette (independent of merchant theme so it
+        // feels like Square regardless of the surrounding shop colours).
+        const SQ_BG = "#F7F7F7";
+        const SQ_CARD = "#FFFFFF";
+        const SQ_BORDER = "#E5E7EB";
+        const SQ_TEXT = "#1A1A1A";
+        const SQ_MUTED = "#6B7280";
+        const SQ_BLUE = "#006AFF";
+
+        const overlay = document.createElement("div");
+        overlay.id = "ws-demo-card-form";
+        overlay.setAttribute("data-testid", "demo-card-form");
+        overlay.style.cssText = "position:fixed;inset:0;z-index:3000;overflow-y:auto;background:" + SQ_BG + ";color:" + SQ_TEXT + ";font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;padding:0;";
+        overlay.innerHTML =
+          // Top bar mimicking Square's slim header
+          '<div style="background:' + SQ_CARD + ';border-bottom:1px solid ' + SQ_BORDER + ';padding:14px 20px;display:flex;align-items:center;justify-content:space-between;">' +
+            '<div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:15px;letter-spacing:-0.01em;">' +
+              '<svg width="22" height="22" viewBox="0 0 24 24" fill="' + SQ_BLUE + '"><rect x="3" y="3" width="18" height="18" rx="3"/></svg>' +
+              '<span>Square</span>' +
+            '</div>' +
+            '<span style="display:inline-block;padding:3px 10px;border-radius:999px;background:linear-gradient(135deg,#FFB800,#FF8A00);color:#1a1a1a;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;">Demo · Test mode</span>' +
+          '</div>' +
+
+          '<div style="max-width:440px;margin:0 auto;padding:28px 20px 40px;">' +
+
+            // Demo-vs-live disclaimer banner
+            '<div style="background:#FFF8E5;border:1px solid #FACC15;border-radius:10px;padding:12px 14px;margin-bottom:18px;font-size:11.5px;line-height:1.55;color:#7A5A00;display:flex;gap:10px;align-items:flex-start;">' +
+              '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A47600" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>' +
+              '<div><strong>This is a WebSorted demo.</strong> The real Square checkout will run on Square\'s own secure page and may look slightly different (Apple Pay, Google Pay, 3-D Secure, etc.) — the steps and confirmation are the same.</div>' +
+            '</div>' +
+
+            '<div style="background:' + SQ_CARD + ';border:1px solid ' + SQ_BORDER + ';border-radius:12px;padding:24px 22px;box-shadow:0 1px 2px rgba(0,0,0,0.04);">' +
+
+              '<div style="text-align:center;margin-bottom:22px;">' +
+                '<div style="font-size:11px;font-weight:600;color:' + SQ_MUTED + ';text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;">Total to pay</div>' +
+                '<div style="font-size:32px;font-weight:700;letter-spacing:-0.02em;">' + sym + total + '</div>' +
+              '</div>' +
+
+              // Test card hints (matches Square's actual sandbox panel formatting)
+              '<div style="background:#F4F8FF;border:1px solid #C7DBFF;border-radius:8px;padding:12px 14px;margin-bottom:18px;font-size:11.5px;line-height:1.7;color:' + SQ_TEXT + ';">' +
+                '<div style="font-weight:600;margin-bottom:4px;color:' + SQ_BLUE + ';">Test card numbers</div>' +
+                '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' +
+                  '<div style="display:flex;justify-content:space-between;"><span>Visa</span><span>4111 1111 1111 1111</span></div>' +
+                  '<div style="display:flex;justify-content:space-between;"><span>Mastercard</span><span>5105 1051 0510 5100</span></div>' +
+                  '<div style="display:flex;justify-content:space-between;"><span>Amex</span><span>3782 822463 10005</span></div>' +
+                '</div>' +
+                '<div style="margin-top:6px;color:' + SQ_MUTED + ';font-size:10.5px;">CVV: any 3 digits (4 for Amex) · Expiry: any future date</div>' +
+              '</div>' +
+
+              // Wallet buttons (mock Apple Pay / Google Pay)
+              '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">' +
+                '<button type="button" data-testid="demo-apple-pay" id="ws-demo-apple-pay" style="display:flex;align-items:center;justify-content:center;gap:6px;padding:13px;background:#000;color:#fff;border:none;border-radius:6px;font-size:15px;font-weight:500;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif;letter-spacing:-0.01em;">' +
+                  '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.564 13.255c-.027-2.787 2.276-4.117 2.378-4.182-1.296-1.894-3.317-2.155-4.038-2.183-1.72-.175-3.354 1.013-4.226 1.013-.873 0-2.218-.987-3.65-.96-1.876.028-3.605 1.09-4.57 2.769-1.948 3.378-.498 8.378 1.401 11.123.928 1.345 2.034 2.852 3.484 2.799 1.4-.057 1.928-.906 3.62-.906 1.69 0 2.166.906 3.643.876 1.504-.028 2.456-1.367 3.376-2.717 1.063-1.557 1.501-3.06 1.527-3.137-.034-.014-2.929-1.124-2.945-4.495zm-2.78-8.255c.78-.94 1.301-2.244 1.16-3.546-1.12.046-2.476.745-3.28 1.681-.722.83-1.353 2.16-1.183 3.434 1.247.097 2.524-.633 3.303-1.569z"/></svg>' +
+                  '<span style="font-weight:600;font-size:16px;">Pay</span>' +
+                '</button>' +
+                '<button type="button" data-testid="demo-google-pay" id="ws-demo-google-pay" style="display:flex;align-items:center;justify-content:center;gap:6px;padding:13px;background:#000;color:#fff;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">' +
+                  '<svg width="46" height="18" viewBox="0 0 90 36" aria-hidden="true">' +
+                    '<text x="0" y="24" font-family="Arial,sans-serif" font-weight="600" font-size="18" fill="#fff" letter-spacing="-0.5">G&nbsp;Pay</text>' +
+                  '</svg>' +
+                '</button>' +
+              '</div>' +
+              '<div style="display:flex;align-items:center;gap:10px;margin:6px 0 16px;color:' + SQ_MUTED + ';font-size:11px;">' +
+                '<div style="flex:1;height:1px;background:' + SQ_BORDER + ';"></div>' +
+                '<span style="text-transform:uppercase;letter-spacing:0.08em;font-weight:600;font-size:10px;">or pay with card</span>' +
+                '<div style="flex:1;height:1px;background:' + SQ_BORDER + ';"></div>' +
+              '</div>' +
+
+              '<form id="ws-demo-card-form-inner" autocomplete="off" style="display:flex;flex-direction:column;gap:12px;">' +
+                '<label style="display:block;">' +
+                  '<span style="font-size:12px;font-weight:600;color:' + SQ_MUTED + ';">Email</span>' +
+                  '<input type="email" id="ws-demo-email" value="' + (email || "") + '" placeholder="you@example.com" style="width:100%;margin-top:6px;padding:11px 12px;border:1px solid ' + SQ_BORDER + ';border-radius:6px;background:' + SQ_CARD + ';color:' + SQ_TEXT + ';font-size:14px;outline:none;box-sizing:border-box;transition:border-color 0.15s,box-shadow 0.15s;" />' +
+                '</label>' +
+                '<label style="display:block;">' +
+                  '<span style="font-size:12px;font-weight:600;color:' + SQ_MUTED + ';">Card number</span>' +
+                  '<div style="position:relative;">' +
+                    '<input type="text" id="ws-demo-card-number" data-testid="demo-card-number" inputmode="numeric" maxlength="23" placeholder="1234 1234 1234 1234" style="width:100%;margin-top:6px;padding:11px 44px 11px 12px;border:1px solid ' + SQ_BORDER + ';border-radius:6px;background:' + SQ_CARD + ';color:' + SQ_TEXT + ';font-size:14px;outline:none;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.02em;" />' +
+                    '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="' + SQ_MUTED + '" stroke-width="1.6" style="position:absolute;right:12px;top:50%;transform:translateY(-25%);"><rect x="2" y="5" width="20" height="14" rx="2" ry="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>' +
+                  '</div>' +
+                '</label>' +
+                '<div style="display:flex;gap:12px;">' +
+                  '<label style="flex:1;">' +
+                    '<span style="font-size:12px;font-weight:600;color:' + SQ_MUTED + ';">Expiry</span>' +
+                    '<input type="text" id="ws-demo-exp" data-testid="demo-card-expiry" inputmode="numeric" maxlength="7" placeholder="MM / YY" style="width:100%;margin-top:6px;padding:11px 12px;border:1px solid ' + SQ_BORDER + ';border-radius:6px;background:' + SQ_CARD + ';color:' + SQ_TEXT + ';font-size:14px;outline:none;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" />' +
+                  '</label>' +
+                  '<label style="flex:1;">' +
+                    '<span style="font-size:12px;font-weight:600;color:' + SQ_MUTED + ';">CVV</span>' +
+                    '<input type="text" id="ws-demo-cvv" data-testid="demo-card-cvv" inputmode="numeric" maxlength="4" placeholder="123" style="width:100%;margin-top:6px;padding:11px 12px;border:1px solid ' + SQ_BORDER + ';border-radius:6px;background:' + SQ_CARD + ';color:' + SQ_TEXT + ';font-size:14px;outline:none;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" />' +
+                  '</label>' +
+                '</div>' +
+                '<label style="display:block;">' +
+                  '<span style="font-size:12px;font-weight:600;color:' + SQ_MUTED + ';">Postcode / ZIP</span>' +
+                  '<input type="text" id="ws-demo-zip" data-testid="demo-card-zip" maxlength="10" placeholder="SW1A 1AA" style="width:100%;margin-top:6px;padding:11px 12px;border:1px solid ' + SQ_BORDER + ';border-radius:6px;background:' + SQ_CARD + ';color:' + SQ_TEXT + ';font-size:14px;outline:none;box-sizing:border-box;" />' +
+                '</label>' +
+                '<div id="ws-demo-card-error" role="alert" style="display:none;padding:9px 11px;border-radius:6px;background:#FEF2F2;border:1px solid #FECACA;color:#B91C1C;font-size:12px;"></div>' +
+                '<button id="ws-demo-pay-btn" data-testid="demo-pay-btn" type="submit" style="margin-top:8px;padding:14px;background:' + SQ_BLUE + ';color:#FFFFFF;border:none;border-radius:6px;font-weight:600;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;gap:8px;letter-spacing:0.01em;transition:background-color 0.15s;">' +
+                  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
+                  '<span id="ws-demo-pay-label">Pay ' + sym + total + '</span>' +
+                '</button>' +
+                '<button type="button" id="ws-demo-cancel-btn" data-testid="demo-cancel-btn" style="background:none;border:none;color:' + SQ_MUTED + ';font-size:12.5px;cursor:pointer;padding:6px;text-decoration:underline;">Cancel and return to cart</button>' +
+              '</form>' +
+            '</div>' +
+
+            // "Powered by Square" footer + WebSorted disclosure
+            '<div style="text-align:center;margin-top:18px;font-size:11px;color:' + SQ_MUTED + ';line-height:1.7;">' +
+              '<div style="display:flex;align-items:center;justify-content:center;gap:5px;margin-bottom:6px;">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>' +
+                '<span>Demo checkout · No card was charged</span>' +
+              '</div>' +
+              '<div style="opacity:0.85;">Real Square checkout runs on Square\'s own secure servers. Layout may vary slightly. Built with <a href="https://websorted.uk" target="_blank" rel="noopener" style="color:' + SQ_MUTED + ';text-decoration:underline;">WebSorted</a>.</div>' +
+            '</div>' +
+
+          '</div>';
+        document.body.appendChild(overlay);
+
+        // Focus styles + auto-format
+        overlay.querySelectorAll("input").forEach(function(inp) {
+          inp.addEventListener("focus", function() {
+            inp.style.borderColor = SQ_BLUE;
+            inp.style.boxShadow = "0 0 0 3px rgba(0,106,255,0.12)";
+          });
+          inp.addEventListener("blur", function() {
+            inp.style.borderColor = SQ_BORDER;
+            inp.style.boxShadow = "none";
+          });
+        });
+
+        // Auto-format card number with spaces
+        const cardInput = overlay.querySelector("#ws-demo-card-number");
+        cardInput.addEventListener("input", function(e) {
+          const digits = e.target.value.replace(/\D/g, "").slice(0, 19);
+          e.target.value = digits.replace(/(.{4})/g, "$1 ").trim();
+        });
+        // Auto-format expiry MM / YY
+        const expInput = overlay.querySelector("#ws-demo-exp");
+        expInput.addEventListener("input", function(e) {
+          let v = e.target.value.replace(/\D/g, "").slice(0, 4);
+          if (v.length >= 3) v = v.slice(0, 2) + " / " + v.slice(2);
+          e.target.value = v;
+        });
+
+        const showErr = function(msg) {
+          const err = overlay.querySelector("#ws-demo-card-error");
+          err.textContent = msg;
+          err.style.display = "block";
+        };
+
+        const form = overlay.querySelector("#ws-demo-card-form-inner");
+        form.addEventListener("submit", function(ev) {
+          ev.preventDefault();
+          const card = (cardInput.value || "").replace(/\s/g, "");
+          const exp = (expInput.value || "").replace(/\s/g, "");
+          const cvv = (overlay.querySelector("#ws-demo-cvv").value || "").trim();
+          if (card.length < 13 || card.length > 19) { showErr("Enter a valid card number."); return; }
+          if (!/^\d{2}\/\d{2}$/.test(exp)) { showErr("Enter a valid expiry as MM/YY."); return; }
+          if (cvv.length < 3) { showErr("Enter a valid CVV."); return; }
+          // Pretend to process
+          const btn = overlay.querySelector("#ws-demo-pay-btn");
+          const label = overlay.querySelector("#ws-demo-pay-label");
+          btn.disabled = true;
+          btn.style.opacity = "0.85";
+          btn.style.cursor = "wait";
+          label.textContent = "Processing payment\u2026";
+          setTimeout(function() {
+            label.textContent = "Approved \u2713";
+            setTimeout(function() {
+              window.location.href = redirectUrl;
+            }, 600);
+          }, 1400);
+        });
+
+        overlay.querySelector("#ws-demo-cancel-btn").addEventListener("click", function() {
+          overlay.remove();
+        });
+
+        // Wallet (Apple Pay / Google Pay) mock handlers — show a brief
+        // biometric-style overlay, then redirect.
+        function _runWalletMock(walletName, brandColor) {
+          const sheet = document.createElement("div");
+          sheet.setAttribute("data-testid", "demo-wallet-sheet");
+          sheet.style.cssText = "position:fixed;inset:0;z-index:3100;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;padding:20px;";
+          sheet.innerHTML =
+            '<div style="background:#fff;border-radius:14px;max-width:340px;width:100%;padding:22px 22px 18px;box-shadow:0 24px 48px rgba(0,0,0,0.35);text-align:center;color:#1a1a1a;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif;">' +
+              '<div style="font-size:11px;font-weight:600;color:#6B7280;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px;">' + walletName + '</div>' +
+              '<div style="font-size:22px;font-weight:700;letter-spacing:-0.01em;margin-bottom:14px;">' + sym + total + '</div>' +
+              '<div style="display:flex;justify-content:center;align-items:center;gap:8px;padding:14px 0;border-top:1px solid #E5E7EB;border-bottom:1px solid #E5E7EB;font-size:12.5px;color:#374151;margin-bottom:18px;">' +
+                '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + brandColor + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C8.13 2 5 5.13 5 9v3.586l-1.707 1.707A1 1 0 0 0 4 16h16a1 1 0 0 0 .707-1.707L19 12.586V9c0-3.87-3.13-7-7-7z"/><path d="M9 18a3 3 0 0 0 6 0"/></svg>' +
+                '<span>Hold near sensor or use Face ID</span>' +
+              '</div>' +
+              '<div id="ws-wallet-status" style="font-size:13px;color:' + brandColor + ';font-weight:600;margin-bottom:6px;display:flex;align-items:center;justify-content:center;gap:8px;">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" style="animation:ws-spin 0.9s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>' +
+                '<span>Authenticating\u2026</span>' +
+              '</div>' +
+              '<style>@keyframes ws-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>' +
+            '</div>';
+          document.body.appendChild(sheet);
+          setTimeout(function() {
+            const status = sheet.querySelector("#ws-wallet-status");
+            if (status) status.innerHTML =
+              '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0F9D58" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' +
+              '<span style="color:#0F9D58;">Approved</span>';
+            setTimeout(function() { window.location.href = redirectUrl; }, 700);
+          }, 1300);
+        }
+        overlay.querySelector("#ws-demo-apple-pay").addEventListener("click", function() {
+          _runWalletMock("Apple Pay", "#000000");
+        });
+        overlay.querySelector("#ws-demo-google-pay").addEventListener("click", function() {
+          _runWalletMock("Google Pay", "#1a73e8");
+        });
+      }
+
       function showOrderSuccess(orderId, email) {
-        const main = document.querySelector("main") || document.body;
         const overlay = document.createElement("div");
         overlay.style.cssText = "position:fixed;inset:0;z-index:3000;display:flex;align-items:center;justify-content:center;background:" + BG + ";";
         overlay.innerHTML = '<div style="text-align:center;max-width:480px;padding:40px;">' +
@@ -705,7 +963,7 @@ Distin</a>
         if (params.get("checkout") === "success" && params.get("demo") === "1") {
           // Demo-mode confirmation (Square sandbox short-circuit). Wipe cart
           // and show the rich branded confirmation overlay.
-          try { localStorage.removeItem("ws_cart"); } catch(e) {}
+          try { localStorage.removeItem(WS_CART_KEY); } catch(e) {}
           cart = [];
           updateCartBadge();
           showDemoOrderConfirmation({
@@ -843,7 +1101,7 @@ Distin</a>
           }
         } catch (_) {}
       }
-      _wsResolveApi().finally(function() { loadMeta(); loadProducts(); });
+      _wsResolveApi().finally(function() { loadMeta(); loadProducts(); updateCartBadge(); });
 
       // Handle Product Spotlight buy buttons via event delegation
       // (works even if the buttons are added later or the per-element handler missed them).

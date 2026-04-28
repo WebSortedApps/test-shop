@@ -1062,9 +1062,10 @@ Distin</a>
       _wsResolveApi().finally(function() { loadMeta(); loadProducts(); updateCartBadge(); hydrateCategorySections(); hydrateProductCarousels(); startSpotlightCountdowns(); hydrateShopTheLook(); });
 
       // ---- Shop the Look hotspot interaction --------------------------------
-      // Wires up [data-ws-stl] sections: clicking a hotspot fetches the linked
-      // product (lazy, cached) and renders a side-card with Add-to-cart wired
-      // to wsShop.addToCart so the existing cart drawer flow handles it.
+      // Wires up [data-ws-stl] sections. A hotspot can EITHER link to a local
+      // shop product (fetch + render side-card with Add-to-cart) OR to an
+      // external affiliate URL (opens in a new tab with rel="sponsored
+      // noopener" so SEO/reflink hygiene is correct).
       function hydrateShopTheLook() {
         const wraps = document.querySelectorAll('[data-ws-stl]');
         if (!wraps.length) return;
@@ -1073,12 +1074,13 @@ Distin</a>
           if (!pid) return null;
           if (productCache[pid]) return productCache[pid];
           try {
-            const r = await fetch(API + '/shop/' + SITE_ID + '/products/' + encodeURIComponent(pid) + '/public');
+            const r = await fetch(WS_API + '/shop/' + SITE_ID + '/products/' + encodeURIComponent(pid) + '/public');
             if (!r.ok) return null;
             productCache[pid] = await r.json();
             return productCache[pid];
           } catch (_) { return null; }
         };
+        const esc = function(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
         wraps.forEach(function(wrap) {
           let hotspots = [];
           try { hotspots = JSON.parse(wrap.getAttribute('data-ws-stl') || '[]'); } catch (_) {}
@@ -1114,14 +1116,48 @@ Distin</a>
               card.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
           };
+          const renderAffiliate = function(hs) {
+            const url = hs.affiliate_url || '';
+            const merchant = hs.affiliate_merchant || (function() {
+              try { return new URL(url).hostname.replace(/^www\./, ''); } catch (_) { return 'external'; }
+            })();
+            const price = hs.affiliate_price || '';
+            const img = hs.affiliate_image ? '<img class="ws-stl-card-img" src="' + esc(hs.affiliate_image) + '" alt="' + esc(hs.label || merchant) + '" />' : '';
+            card.innerHTML =
+              img +
+              '<h3>' + esc(hs.label || merchant) + '</h3>' +
+              (price ? '<div class="ws-stl-price">' + esc(price) + '</div>' : '') +
+              '<p class="ws-stl-desc">Shop this on <strong>' + esc(merchant) + '</strong>. Opens in a new tab.</p>' +
+              '<a class="ws-stl-add ws-stl-add--aff" href="' + esc(url) + '" target="_blank" rel="sponsored noopener noreferrer" data-testid="stl-affiliate-link">' +
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
+                'Shop on ' + esc(merchant) +
+              '</a>';
+            if (window.matchMedia('(max-width: 899px)').matches) {
+              card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          };
           pins.forEach(function(pin) {
-            pin.addEventListener('click', async function() {
+            pin.addEventListener('click', async function(ev) {
               pins.forEach(function(p) { p.classList.remove('is-active'); });
               pin.classList.add('is-active');
               const idx = parseInt(pin.getAttribute('data-stl-pin') || '0', 10);
               const hs = hotspots[idx] || {};
+              const kind = hs.link_type || pin.getAttribute('data-stl-kind') || 'product';
+              if (kind === 'affiliate') {
+                if (!hs.affiliate_url) {
+                  card.innerHTML = '<p class="ws-stl-hint">' + esc(hs.label || 'Affiliate link not set.') + '</p>';
+                  return;
+                }
+                renderAffiliate(hs);
+                // Also open the affiliate URL in a new tab so the click still
+                // performs its primary action — preserves merchant click
+                // attribution even on desktop where the side-card button is
+                // secondary.
+                try { window.open(hs.affiliate_url, '_blank', 'noopener,noreferrer'); } catch (_) {}
+                return;
+              }
               if (!hs.product_id) {
-                card.innerHTML = '<p class="ws-stl-hint">' + (hs.label || 'No product linked yet.') + '</p>';
+                card.innerHTML = '<p class="ws-stl-hint">' + esc(hs.label || 'No product linked yet.') + '</p>';
                 return;
               }
               card.innerHTML = '<p class="ws-stl-hint">Loading\u2026</p>';
@@ -1164,7 +1200,7 @@ Distin</a>
         if (!targets.length) return;
         let cats = [];
         try {
-          const r = await fetch(API + '/shop/' + SITE_ID + '/categories/public');
+          const r = await fetch(WS_API + '/shop/' + SITE_ID + '/categories/public');
           if (r.ok) cats = await r.json();
         } catch (_) {}
         targets.forEach(function(node) {
@@ -1211,7 +1247,7 @@ Distin</a>
           const source = node.getAttribute('data-source') || 'featured';
           const cat = node.getAttribute('data-category') || '';
           const max = parseInt(node.getAttribute('data-max-items') || '8', 10);
-          let url = API + '/shop/' + SITE_ID + '/products/public?limit=' + max;
+          let url = WS_API + '/shop/' + SITE_ID + '/products/public?limit=' + max;
           if (source && source !== 'category') url += '&source=' + encodeURIComponent(source);
           if (cat) url += '&category=' + encodeURIComponent(cat);
           let products = [];

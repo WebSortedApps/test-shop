@@ -1342,6 +1342,17 @@ textarea.form-input {
     font-size: 13px;
 }
 .ws-stl-card .ws-stl-add:hover { opacity: 0.9; }
+.ws-stl-card .ws-stl-add--aff {
+    background: #111; color: #fff; text-decoration: none;
+}
+.ws-stl-card .ws-stl-add--aff:hover { background: #000; opacity: 1; }
+.ws-stl-pin--aff .ws-stl-pin-dot::before {
+    background: #111;
+}
+.ws-stl-pin--aff .ws-stl-pin-dot {
+    background: #fff;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+}
 
 /* Blog Embed Styles */
 .ws-blog-grid {

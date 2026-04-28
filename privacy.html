@@ -1212,6 +1212,15 @@ Distin</a>
               }
               card.innerHTML = '<p class="ws-stl-hint">Loading\u2026</p>';
               const product = await fetchProduct(hs.product_id);
+              if (!product) {
+                const safeLabel = esc(hs.label || '');
+                card.innerHTML =
+                  '<p class="ws-stl-hint">' +
+                    (safeLabel ? '<strong>' + safeLabel + '</strong><br/>' : '') +
+                    'This product is no longer available.' +
+                  '</p>';
+                return;
+              }
               renderCard(product);
             });
           });

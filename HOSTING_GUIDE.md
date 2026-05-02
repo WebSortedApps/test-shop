@@ -1,4 +1,4 @@
-# Hosting Guide for Test Shop
+# Hosting Guide for Demo Shop
 
 Built with WebSorted AI Website Builder
 
